@@ -8,13 +8,16 @@
   <style>
     body { margin: 0; font-family: sans-serif; display: flex; height: 100vh; }
     #map { flex: 1; height: 100%; }
-    #panel { width: 340px; padding: 16px; box-sizing: border-box; background: #f8fafc; border-left: 1px solid #cbd5e1; overflow-y: auto; }
+    #panel { width: 360px; padding: 16px; box-sizing: border-box; background: #f8fafc; border-left: 1px solid #cbd5e1; overflow-y: auto; }
     .control { margin-bottom: 12px; }
+    .section-title { font-size: 13px; font-weight: bold; color: #0f172a; margin: 14px 0 8px; padding-top: 10px; border-top: 1px solid #e2e8f0; }
     label { display: block; font-size: 13px; font-weight: bold; margin-bottom: 4px; }
     input, select { width: 100%; padding: 6px; box-sizing: border-box; }
     .card { background: #fff; border: 1px solid #e2e8f0; border-radius: 8px; padding: 12px; margin-top: 12px; }
     .swatch { display: inline-block; width: 16px; height: 16px; border-radius: 4px; vertical-align: middle; border: 1px solid #94a3b8; }
     .big-num { font-size: 28px; font-weight: bold; color: #0f172a; }
+    .tradeoff-box { background: #f1f5f9; border-radius: 6px; padding: 8px; margin-top: 8px; font-size: 12px; }
+    .tradeoff-row { display: flex; justify-content: space-between; margin: 3px 0; }
   </style>
 </head>
 <body>
@@ -39,6 +42,21 @@
         <option value="winter">winter（冬）</option>
       </select>
     </div>
+
+    <div class="section-title">介入パラメータ（Trade-offs）</div>
+    <div class="control">
+      <label for="windGw">洋上風力発電 (GW): <span id="windGwVal">0</span></label>
+      <input id="windGw" type="number" min="0" step="50" value="0" />
+    </div>
+    <div class="control">
+      <label for="aerosolMt">成層圏エアロゾル注入 (Mt): <span id="aerosolMtVal">0</span></label>
+      <input id="aerosolMt" type="number" min="0" step="1" value="0" />
+    </div>
+    <div class="control">
+      <label for="cdrGt">二酸化炭素除去 CDR (Gt): <span id="cdrGtVal">0</span></label>
+      <input id="cdrGt" type="number" min="0" step="1" value="0" />
+    </div>
+
     <div id="result" class="card">
       <div style="font-size: 13px; color: #64748b;">まだ地点が選択されていません</div>
     </div>
@@ -52,25 +70,53 @@
     }).addTo(map);
     let marker = null;
     let lastLatLng = null;
+
     const yearEl = document.getElementById("year");
     const anomEl = document.getElementById("anom");
     const seasonEl = document.getElementById("season");
+    const windGwEl = document.getElementById("windGw");
+    const aerosolMtEl = document.getElementById("aerosolMt");
+    const cdrGtEl = document.getElementById("cdrGt");
     const resultEl = document.getElementById("result");
+
+    function reRunIfSelected() {
+      if (lastLatLng) runSim(lastLatLng.lat, lastLatLng.lng);
+    }
+
     yearEl.addEventListener("input", () => {
       document.getElementById("yearVal").textContent = yearEl.value;
-      if (lastLatLng) runSim(lastLatLng.lat, lastLatLng.lng);
+      reRunIfSelected();
     });
     anomEl.addEventListener("input", () => {
       document.getElementById("anomVal").textContent = anomEl.value;
-      if (lastLatLng) runSim(lastLatLng.lat, lastLatLng.lng);
+      reRunIfSelected();
     });
-    seasonEl.addEventListener("change", () => {
-      if (lastLatLng) runSim(lastLatLng.lat, lastLatLng.lng);
+    seasonEl.addEventListener("change", reRunIfSelected);
+
+    [
+      [windGwEl, "windGwVal"],
+      [aerosolMtEl, "aerosolMtVal"],
+      [cdrGtEl, "cdrGtVal"]
+    ].forEach(([el, labelId]) => {
+      const trigger = () => {
+        const val = Number(el.value);
+        document.getElementById(labelId).textContent = Number.isFinite(val) ? val : 0;
+        reRunIfSelected();
+      };
+      el.addEventListener("input", trigger);
+      el.addEventListener("change", trigger);
     });
+
     map.on("click", (e) => {
       lastLatLng = e.latlng;
       runSim(e.latlng.lat, e.latlng.lng);
     });
+
+    function nonNegNum(el) {
+      const v = Number(el.value);
+      return Number.isFinite(v) && v >= 0 ? v : 0;
+    }
+
     async function runSim(lat, lng) {
       resultEl.innerHTML = "計算中...";
       try {
@@ -84,13 +130,23 @@
             year: Number(yearEl.value),
             temperature_anomaly: Number(anomEl.value),
             season: seasonEl.value,
-            include_timeseries: false
+            include_timeseries: false,
+            interventions: {
+              wind_power_gw: nonNegNum(windGwEl),
+              aerosol_injection_mt: nonNegNum(aerosolMtEl),
+              cdr_gt: nonNegNum(cdrGtEl)
+            }
           })
         });
         const data = await res.json();
         const coral = data.coral_health || {};
         const app = data.sea_appearance || {};
         const hex = app.hex_color || "#00B4D8";
+        const interv = data.interventions || {};
+        const cooling = interv.cooling_effects || {};
+        const tr = data.tradeoffs || {};
+        const comp = tr.component_risks || {};
+
         if (marker) map.removeLayer(marker);
         marker = L.circleMarker([lat, lng], {
           radius: 10,
@@ -99,6 +155,7 @@
           fillColor: hex,
           fillOpacity: 0.9
         }).addTo(map);
+
         resultEl.innerHTML = `
           <div><strong>座標:</strong> ${lat.toFixed(4)}, ${lng.toFixed(4)}</div>
           <div style="margin-top: 8px;">サンゴ白化率</div>
@@ -109,6 +166,15 @@
           </div>
           <div style="margin-top: 6px;"><strong>クマノミ:</strong> ${data.clownfish?.presence_probability ?? "-"}</div>
           <div><strong>ウミガメ:</strong> ${data.sea_turtle?.presence_probability ?? "-"}</div>
+          <div class="tradeoff-box">
+            <div><strong>介入効果・トレードオフ</strong></div>
+            <div class="tradeoff-row"><span>SST冷却:</span><span>-${cooling.sst_cooling_c ?? "-"}°C</span></div>
+            <div class="tradeoff-row"><span>気温冷却:</span><span>-${cooling.air_temp_cooling_c ?? "-"}°C</span></div>
+            <div class="tradeoff-row"><span>光減衰ストレス:</span><span>${tr.light_dimming_stress ?? "-"}</span></div>
+            <div class="tradeoff-row"><span>生態系副作用リスク:</span><span>${tr.ecosystem_side_effect_risk ?? "-"}</span></div>
+            <div class="tradeoff-row"><span>純便益指数:</span><span>${tr.net_benefit_index ?? "-"}</span></div>
+            <div class="tradeoff-row"><span>内訳 (風力/エアロゾル/CDR):</span><span>${comp.wind_risk ?? "-"} / ${comp.aerosol_risk ?? "-"} / ${comp.cdr_risk ?? "-"}</span></div>
+          </div>
           <p style="font-size: 12px; color: #334155; margin-top: 10px;">${data.summary ?? ""}</p>
         `;
       } catch (err) {
