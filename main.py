@@ -4,6 +4,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
+from intervention_tradeoffs import InterventionParams, evaluate_interventions
+from intervention_tradeoffs import InterventionParams, evaluate_interventions
 from sst_provider import get_base_sst_c
 from polar_ecosystem import (
     POLAR_PROFILES,
@@ -68,6 +70,8 @@ class SimulationRequest(BaseModel):
     base_year: int = Field(2025, ge=1900, le=2200)
     end_year: Optional[int] = Field(None, ge=1900, le=2200)
     include_timeseries: bool = True
+    interventions: InterventionParams = Field(default_factory=InterventionParams)
+    interventions: InterventionParams = Field(default_factory=InterventionParams)
 
 
 def _clamp01(val: float) -> float:
@@ -129,15 +133,21 @@ def _compute_point(
     base_year: int,
     air_anomaly: float,
     sst_anomaly: float,
+    interventions: Optional[InterventionParams] = None,
 ) -> dict:
     years_elapsed = max(0, target_year - base_year)
+    interv = evaluate_interventions(interventions, years_elapsed)
+    sst_cooling_c = interv["cooling_effects"]["sst_cooling_c"]
+    air_cooling_c = interv["cooling_effects"]["air_temp_cooling_c"]
+    dimming_stress = interv["tradeoffs"]["light_dimming_stress"]
+    eco_risk = interv["tradeoffs"]["ecosystem_side_effect_risk"]
 
     seasonal_sst_c = site["base_sst_c"] + season_cfg["sst_offset_c"]
     seasonal_air_c = site["base_air_temp_c"] + season_cfg["air_offset_c"]
 
     trend_factor = 1.0 + min(0.45, years_elapsed * 0.014)
-    current_sst_anomaly = sst_anomaly * trend_factor
-    current_air_anomaly = air_anomaly * trend_factor
+    current_sst_anomaly = sst_anomaly * trend_factor - sst_cooling_c
+    current_air_anomaly = air_anomaly * trend_factor - air_cooling_c
 
     projected_sst_c = round(seasonal_sst_c + current_sst_anomaly, 2)
     projected_air_c = round(seasonal_air_c + current_air_anomaly, 2)
@@ -148,10 +158,14 @@ def _compute_point(
     positive_heat = max(0.0, effective_heat_stress)
 
     annual_load = positive_heat * site["bleaching_sensitivity"]
-    cumulative_stress = round(_clamp01(1.0 - math.exp(-(years_elapsed * annual_load) / 60.0)), 3)
+    cumulative_stress = round(
+        _clamp01(1.0 - math.exp(-(years_elapsed * annual_load) / 60.0) + eco_risk * 0.25), 3
+    )
 
     raw_bleaching = (
-        positive_heat * 17.5 * site["bleaching_sensitivity"] + cumulative_stress * 36.0
+        positive_heat * 17.5 * site["bleaching_sensitivity"]
+        + cumulative_stress * 36.0
+        + dimming_stress * 12.0
     ) * site["coral_viability"]
     bleaching_rate = round(min(100.0, max(0.0, raw_bleaching)), 2)
 
@@ -170,6 +184,7 @@ def _compute_point(
             * season_cfg["activity_weight"]
             - positive_heat * 0.08
             - cumulative_stress * 0.20
+            - dimming_stress * 0.15
         ),
         3,
     )
@@ -179,12 +194,18 @@ def _compute_point(
             site["base_turtle_suitability"] * season_cfg["activity_weight"]
             - positive_heat * 0.085 * site["turtle_sensitivity"]
             - cumulative_stress * 0.22 * site["turtle_sensitivity"]
+            - eco_risk * 0.18
         ),
         3,
     )
 
-    degradation = min(1.0, (bleaching_rate / 100.0) * 0.7 + cumulative_stress * 0.3)
-    if degradation >= 0.65:
+    degradation = min(
+        1.0, (bleaching_rate / 100.0) * 0.65 + cumulative_stress * 0.25 + dimming_stress * 0.25
+    )
+    if dimming_stress >= 0.55:
+        appearance_state = "dimmed_aerosol_haze"
+        hex_color = "#6C7A89"
+    elif degradation >= 0.65:
         appearance_state = "murky_algae_shifted"
         hex_color = "#5E6B48"
     elif degradation >= 0.30:
@@ -213,6 +234,8 @@ def _compute_point(
         "clownfish": {"presence_probability": clownfish_prob},
         "sea_turtle": {"presence_probability": turtle_prob},
         "sea_appearance": {"state": appearance_state, "hex_color": hex_color},
+        "interventions": interv,
+        "tradeoffs": interv["tradeoffs"],
     }
 
     if is_polar_site(site["lat"]):
@@ -240,7 +263,11 @@ def simulate_ecosystem(req: SimulationRequest):
     season_cfg = SEASON_FACTORS[req.season]
 
     air_anom = req.temperature_anomaly
-    sst_anom = req.sea_temp_anomaly if req.sea_temp_anomaly is not None else round(req.temperature_anomaly * 0.85, 3)
+    sst_anom = (
+        req.sea_temp_anomaly
+        if req.sea_temp_anomaly is not None
+        else round(req.temperature_anomaly * 0.85, 3)
+    )
 
     current = _compute_point(
         site=site,
@@ -250,6 +277,7 @@ def simulate_ecosystem(req: SimulationRequest):
         base_year=req.base_year,
         air_anomaly=air_anom,
         sst_anomaly=sst_anom,
+        interventions=req.interventions,
     )
 
     timeseries = None
@@ -267,11 +295,13 @@ def simulate_ecosystem(req: SimulationRequest):
                 base_year=req.base_year,
                 air_anomaly=air_anom,
                 sst_anomaly=sst_anom,
+                interventions=req.interventions,
             )
             for yr in range(start_yr, end_yr + 1)
         ]
 
     env = current["environment"]
+    tr = current["tradeoffs"]
     if "polar_ecosystem" in current:
         summary = format_polar_summary(
             site_name=site["name"],
@@ -291,7 +321,8 @@ def simulate_ecosystem(req: SimulationRequest):
             f"累積ストレス {current['cumulative_stress']:.3f} により、"
             f"サンゴ白化率 {current['coral_health']['bleaching_rate_percent']}%（{current['coral_health']['status']}）、"
             f"クマノミ {current['clownfish']['presence_probability']}、ウミガメ {current['sea_turtle']['presence_probability']}、"
-            f"海色 {current['sea_appearance']['state']}（{current['sea_appearance']['hex_color']}）と算出されました。"
+            f"海色 {current['sea_appearance']['state']}（{current['sea_appearance']['hex_color']}）、"
+            f"介入トレードオフ（冷却 -{current['interventions']['cooling_effects']['sst_cooling_c']:.3f}°C / 生態系リスク {tr['ecosystem_side_effect_risk']:.3f}）と算出されました。"
         )
 
     res = {
@@ -300,7 +331,7 @@ def simulate_ecosystem(req: SimulationRequest):
         "coordinates": {"lat": site["lat"], "lon": site["lon"]},
         "baseline_climate": {
             "base_sst_c": site["base_sst_c"],
-        "sst_source": site["sst_source"],
+            "sst_source": site["sst_source"],
             "base_air_temp_c": site["base_air_temp_c"],
             "base_year": req.base_year,
         },
@@ -313,6 +344,8 @@ def simulate_ecosystem(req: SimulationRequest):
         "clownfish": current["clownfish"],
         "sea_turtle": current["sea_turtle"],
         "sea_appearance": current["sea_appearance"],
+        "interventions": current["interventions"],
+        "tradeoffs": current["tradeoffs"],
         "summary": summary,
     }
     if "polar_ecosystem" in current:
