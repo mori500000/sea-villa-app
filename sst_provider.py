@@ -26,7 +26,8 @@ def _query_erddap_sst(lat: float, lon: float, timeout_sec: float = 10.0) -> Opti
     target_lon = _normalize_lon_180(lon)
 
     query = f"sst[(last)][(0.0)][({target_lat})][({target_lon})]"
-    url = f"{ERDDAP_BASE_URL}?{urllib.parse.quote(query, safe="[](),:")}"
+    encoded = urllib.parse.quote(query, safe="[](),:")
+    url = f"{ERDDAP_BASE_URL}?{encoded}"
 
     req = urllib.request.Request(url, headers={"User-Agent": "sea-villa-app/1.0"})
     with urllib.request.urlopen(req, timeout=timeout_sec) as resp:
