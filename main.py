@@ -1,8 +1,10 @@
 import math
 from typing import Literal, Optional
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
+from sst_provider import get_base_sst_c
 from polar_ecosystem import (
     POLAR_PROFILES,
     format_polar_summary,
@@ -11,6 +13,14 @@ from polar_ecosystem import (
 )
 
 app = FastAPI(title="Sea Villa Climate Simulator API")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 SeasonType = Literal["spring", "summer", "autumn", "winter"]
 
@@ -73,11 +83,16 @@ def _resolve_site(req: SimulationRequest) -> dict:
     inferred_sst = round(max(-1.5, 29.5 - 0.58 * max(0.0, abs_lat - 10.0)), 2)
     inferred_air = round(inferred_sst - 2.5, 2)
 
-    base_sst = (
-        req.base_sst_c
-        if req.base_sst_c is not None
-        else (preset["base_sst_c"] if preset and req.lat is None else inferred_sst)
-    )
+    if req.base_sst_c is not None:
+        base_sst = req.base_sst_c
+        sst_source = "manual"
+    elif preset and req.lat is None and req.lon is None:
+        base_sst = preset["base_sst_c"]
+        sst_source = "preset"
+    else:
+        sst_info = get_base_sst_c(lat, lon)
+        base_sst = sst_info["base_sst_c"]
+        sst_source = sst_info["source"]
     base_air = (
         req.base_air_temp_c
         if req.base_air_temp_c is not None
@@ -97,6 +112,7 @@ def _resolve_site(req: SimulationRequest) -> dict:
         "lat": round(lat, 6),
         "lon": round(lon, 6),
         "base_sst_c": round(base_sst, 2),
+        "sst_source": sst_source,
         "base_air_temp_c": round(base_air, 2),
         "bleaching_sensitivity": bleaching_sens,
         "turtle_sensitivity": turtle_sens,
@@ -284,6 +300,7 @@ def simulate_ecosystem(req: SimulationRequest):
         "coordinates": {"lat": site["lat"], "lon": site["lon"]},
         "baseline_climate": {
             "base_sst_c": site["base_sst_c"],
+        "sst_source": site["sst_source"],
             "base_air_temp_c": site["base_air_temp_c"],
             "base_year": req.base_year,
         },
