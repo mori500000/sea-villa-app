@@ -2,7 +2,7 @@ import math
 from typing import Literal, Optional
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from intervention_tradeoffs import InterventionParams, evaluate_interventions
 from intervention_tradeoffs import InterventionParams, evaluate_interventions
@@ -72,6 +72,13 @@ class SimulationRequest(BaseModel):
     end_year: Optional[int] = Field(None, ge=1900, le=2200)
     include_timeseries: bool = True
     interventions: InterventionParams = Field(default_factory=InterventionParams)
+    @field_validator("lon", mode="before")
+    @classmethod
+    def _normalize_lon(cls, v):
+        if v is None:
+            return None
+        val = float(v)
+        return round((((val + 180.0) % 360.0) + 360.0) % 360.0 - 180.0, 6)
     interventions: InterventionParams = Field(default_factory=InterventionParams)
 
 

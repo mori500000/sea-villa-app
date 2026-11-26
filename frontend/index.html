@@ -107,9 +107,14 @@
       el.addEventListener("change", trigger);
     });
 
+    function normalizeLon(lng) {
+      return ((((lng + 180) % 360) + 360) % 360) - 180;
+    }
+
     map.on("click", (e) => {
-      lastLatLng = e.latlng;
-      runSim(e.latlng.lat, e.latlng.lng);
+      const normLng = normalizeLon(e.latlng.lng);
+      lastLatLng = { lat: e.latlng.lat, lng: normLng };
+      runSim(e.latlng.lat, normLng);
     });
 
     function nonNegNum(el) {
