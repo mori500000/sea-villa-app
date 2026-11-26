@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field
 from intervention_tradeoffs import InterventionParams, evaluate_interventions
 from intervention_tradeoffs import InterventionParams, evaluate_interventions
 from sst_provider import get_base_sst_c
+from heat_stress_model import compute_coral_heat_metrics
 from polar_ecosystem import (
     POLAR_PROFILES,
     format_polar_summary,
@@ -142,32 +143,30 @@ def _compute_point(
     dimming_stress = interv["tradeoffs"]["light_dimming_stress"]
     eco_risk = interv["tradeoffs"]["ecosystem_side_effect_risk"]
 
-    seasonal_sst_c = site["base_sst_c"] + season_cfg["sst_offset_c"]
-    seasonal_air_c = site["base_air_temp_c"] + season_cfg["air_offset_c"]
-
-    trend_factor = 1.0 + min(0.45, years_elapsed * 0.014)
-    current_sst_anomaly = sst_anomaly * trend_factor - sst_cooling_c
-    current_air_anomaly = air_anomaly * trend_factor - air_cooling_c
-
-    projected_sst_c = round(seasonal_sst_c + current_sst_anomaly, 2)
-    projected_air_c = round(seasonal_air_c + current_air_anomaly, 2)
-
-    sign = 1.0 if current_sst_anomaly >= 0 else -1.0
-    curved_sst_anom = sign * (abs(current_sst_anomaly) ** 1.15)
-    effective_heat_stress = curved_sst_anom * season_cfg["heat_multiplier"]
-    positive_heat = max(0.0, effective_heat_stress)
-
-    annual_load = positive_heat * site["bleaching_sensitivity"]
-    cumulative_stress = round(
-        _clamp01(1.0 - math.exp(-(years_elapsed * annual_load) / 60.0) + eco_risk * 0.25), 3
+    summer_sst_offset_c = SEASON_FACTORS.get("summer", {}).get("sst_offset_c", 0.0)
+    metrics = compute_coral_heat_metrics(
+        base_sst_c=site["base_sst_c"],
+        base_air_temp_c=site["base_air_temp_c"],
+        season_cfg=season_cfg,
+        summer_sst_offset_c=summer_sst_offset_c,
+        sst_anomaly=sst_anomaly,
+        air_anomaly=air_anomaly,
+        years_elapsed=years_elapsed,
+        sst_cooling_c=sst_cooling_c,
+        air_cooling_c=air_cooling_c,
+        dimming_stress=dimming_stress,
+        eco_risk=eco_risk,
+        bleaching_sensitivity=site.get("bleaching_sensitivity", 1.0),
+        coral_viability=site["coral_viability"],
     )
 
-    raw_bleaching = (
-        positive_heat * 17.5 * site["bleaching_sensitivity"]
-        + cumulative_stress * 36.0
-        + dimming_stress * 12.0
-    ) * site["coral_viability"]
-    bleaching_rate = round(min(100.0, max(0.0, raw_bleaching)), 2)
+    current_sst_anomaly = metrics["current_sst_anomaly"]
+    current_air_anomaly = metrics["current_air_anomaly"]
+    projected_sst_c = metrics["projected_sst_c"]
+    projected_air_c = metrics["projected_air_c"]
+    positive_heat = metrics["positive_heat"]
+    cumulative_stress = metrics["cumulative_stress"]
+    bleaching_rate = metrics["bleaching_rate"]
 
     if bleaching_rate >= 70.0:
         coral_status = "severely_bleached (ruins)"
