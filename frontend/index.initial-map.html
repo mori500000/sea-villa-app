@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Sea Villa - Coral Bleaching & Sea Color Viewer</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <style>
+    body { margin: 0; font-family: sans-serif; display: flex; height: 100vh; }
+    #map { flex: 1; height: 100%; }
+    #panel { width: 360px; padding: 16px; box-sizing: border-box; background: #f8fafc; border-left: 1px solid #cbd5e1; overflow-y: auto; }
+    .control { margin-bottom: 12px; }
+    .section-title { font-size: 13px; font-weight: bold; color: #0f172a; margin: 14px 0 8px; padding-top: 10px; border-top: 1px solid #e2e8f0; }
+    label { display: block; font-size: 13px; font-weight: bold; margin-bottom: 4px; }
+    input, select { width: 100%; padding: 6px; box-sizing: border-box; }
+    .card { background: #fff; border: 1px solid #e2e8f0; border-radius: 8px; padding: 12px; margin-top: 12px; }
+    .swatch { display: inline-block; width: 16px; height: 16px; border-radius: 4px; vertical-align: middle; border: 1px solid #94a3b8; }
+    .big-num { font-size: 28px; font-weight: bold; color: #0f172a; }
+    .tradeoff-box { background: #f1f5f9; border-radius: 6px; padding: 8px; margin-top: 8px; font-size: 12px; }
+    .tradeoff-row { display: flex; justify-content: space-between; margin: 3px 0; }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+  <div id="panel">
+    <h2>サンゴ白化・海色ビューア</h2>
+    <p style="font-size: 13px; color: #475569;">地図上をクリックすると、その地点のシミュレーション結果を表示します。</p>
+    <div class="control">
+      <label for="year">対象年: <span id="yearVal">2050</span>年</label>
+      <input id="year" type="range" min="2025" max="2100" value="2050" />
+    </div>
+    <div class="control">
+      <label for="anom">気温偏差: <span id="anomVal">1.5</span>°C</label>
+      <input id="anom" type="range" min="0" max="6" step="0.1" value="1.5" />
+    </div>
+    <div class="control">
+      <label for="season">季節</label>
+      <select id="season">
+        <option value="summer" selected>summer（夏）</option>
+        <option value="spring">spring（春）</option>
+        <option value="autumn">autumn（秋）</option>
+        <option value="winter">winter（冬）</option>
+      </select>
+    </div>
+
+    <div class="section-title">介入パラメータ（Trade-offs）</div>
+    <div class="control">
+      <label for="windGw">洋上風力発電 (GW): <span id="windGwVal">0</span></label>
+      <input id="windGw" type="number" min="0" step="50" value="0" />
+    </div>
+    <div class="control">
+      <label for="aerosolMt">成層圏エアロゾル注入 (Mt): <span id="aerosolMtVal">0</span></label>
+      <input id="aerosolMt" type="number" min="0" step="1" value="0" />
+    </div>
+    <div class="control">
+      <label for="cdrGt">二酸化炭素除去 CDR (Gt): <span id="cdrGtVal">0</span></label>
+      <input id="cdrGt" type="number" min="0" step="1" value="0" />
+    </div>
+
+    <div id="result" class="card">
+      <div style="font-size: 13px; color: #64748b;">まだ地点が選択されていません</div>
+    </div>
+  </div>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script>
+    const API_URL = "https://sea-villa-api-280099873850.asia-northeast1.run.app/simulate";
+    const map = L.map("map", {
+      worldCopyJump: true
+    }).setView([26.2, 127.7], 5);
+
+    const coastlineStyle = {
+      color: "#cbd5e1",
+      weight: 1.2,
+      opacity: 0.9
+    };
+
+    let coastlineLayer = null;
+    async function loadCoastlines() {
+      try {
+        const resp = await fetch("./data/coastlines.geojson", { cache: "no-store" });
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const geojson = await resp.json();
+        coastlineLayer = L.geoJSON(geojson, {
+          style: () => coastlineStyle,
+          interactive: false
+        }).addTo(map);
+      } catch (err) {
+        console.warn("海岸線GeoJSONの読み込みをスキップしました:", err);
+      }
+    }
+    loadCoastlines();
+    let marker = null;
+    let lastLatLng = null;
+
+    const yearEl = document.getElementById("year");
+    const anomEl = document.getElementById("anom");
+    const seasonEl = document.getElementById("season");
+    const windGwEl = document.getElementById("windGw");
+    const aerosolMtEl = document.getElementById("aerosolMt");
+    const cdrGtEl = document.getElementById("cdrGt");
+    const resultEl = document.getElementById("result");
+
+    function reRunIfSelected() {
+      if (lastLatLng) runSim(lastLatLng.lat, lastLatLng.lng);
+    }
+
+    yearEl.addEventListener("input", () => {
+      document.getElementById("yearVal").textContent = yearEl.value;
+      reRunIfSelected();
+    });
+    anomEl.addEventListener("input", () => {
+      document.getElementById("anomVal").textContent = anomEl.value;
+      reRunIfSelected();
+    });
+    seasonEl.addEventListener("change", reRunIfSelected);
+
+    [
+      [windGwEl, "windGwVal"],
+      [aerosolMtEl, "aerosolMtVal"],
+      [cdrGtEl, "cdrGtVal"]
+    ].forEach(([el, labelId]) => {
+      const trigger = () => {
+        const val = Number(el.value);
+        document.getElementById(labelId).textContent = Number.isFinite(val) ? val : 0;
+        reRunIfSelected();
+      };
+      el.addEventListener("input", trigger);
+      el.addEventListener("change", trigger);
+    });
+
+    function normalizeLon(lng) {
+      return ((((lng + 180) % 360) + 360) % 360) - 180;
+    }
+
+    map.on("click", (e) => {
+      const normLng = normalizeLon(e.latlng.lng);
+      lastLatLng = { lat: e.latlng.lat, lng: normLng };
+      runSim(e.latlng.lat, normLng);
+    });
+
+    function nonNegNum(el) {
+      const v = Number(el.value);
+      return Number.isFinite(v) && v >= 0 ? v : 0;
+    }
+
+    async function runSim(lat, lng) {
+      resultEl.innerHTML = "計算中...";
+      try {
+        const res = await fetch(API_URL, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            location_id: "map-click",
+            lat: Number(lat.toFixed(4)),
+            lon: Number(lng.toFixed(4)),
+            year: Number(yearEl.value),
+            temperature_anomaly: Number(anomEl.value),
+            season: seasonEl.value,
+            include_timeseries: false,
+            interventions: {
+              wind_power_gw: nonNegNum(windGwEl),
+              aerosol_injection_mt: nonNegNum(aerosolMtEl),
+              cdr_gt: nonNegNum(cdrGtEl)
+            }
+          })
+        });
+        const data = await res.json();
+        const coral = data.coral_health || {};
+        const app = data.sea_appearance || {};
+        const hex = app.hex_color || "#00B4D8";
+        const interv = data.interventions || {};
+        const cooling = interv.cooling_effects || {};
+        const tr = data.tradeoffs || {};
+        const comp = tr.component_risks || {};
+
+        if (marker) map.removeLayer(marker);
+        marker = L.circleMarker([lat, lng], {
+          radius: 10,
+          color: "#0f172a",
+          weight: 2,
+          fillColor: hex,
+          fillOpacity: 0.9
+        }).addTo(map);
+
+        resultEl.innerHTML = `
+          <div><strong>座標:</strong> ${lat.toFixed(4)}, ${lng.toFixed(4)}</div>
+          <div style="margin-top: 8px;">サンゴ白化率</div>
+          <div class="big-num">${coral.bleaching_rate_percent ?? "-"}%</div>
+          <div><strong>状態:</strong> ${coral.status ?? "-"}</div>
+          <div style="margin-top: 8px;">
+            <strong>海色:</strong> <span class="swatch" style="background:${hex}"></span> ${app.state ?? "-"} (${hex})
+          </div>
+          <div style="margin-top: 6px;"><strong>クマノミ:</strong> ${data.clownfish?.presence_probability ?? "-"}</div>
+          <div><strong>ウミガメ:</strong> ${data.sea_turtle?.presence_probability ?? "-"}</div>
+          <div class="tradeoff-box">
+            <div><strong>介入効果・トレードオフ</strong></div>
+            <div class="tradeoff-row"><span>SST冷却:</span><span>-${cooling.sst_cooling_c ?? "-"}°C</span></div>
+            <div class="tradeoff-row"><span>気温冷却:</span><span>-${cooling.air_temp_cooling_c ?? "-"}°C</span></div>
+            <div class="tradeoff-row"><span>光減衰ストレス:</span><span>${tr.light_dimming_stress ?? "-"}</span></div>
+            <div class="tradeoff-row"><span>生態系副作用リスク:</span><span>${tr.ecosystem_side_effect_risk ?? "-"}</span></div>
+            <div class="tradeoff-row"><span>純便益指数:</span><span>${tr.net_benefit_index ?? "-"}</span></div>
+            <div class="tradeoff-row"><span>内訳 (風力/エアロゾル/CDR):</span><span>${comp.wind_risk ?? "-"} / ${comp.aerosol_risk ?? "-"} / ${comp.cdr_risk ?? "-"}</span></div>
+          </div>
+          <p style="font-size: 12px; color: #334155; margin-top: 10px;">${data.summary ?? ""}</p>
+        `;
+      } catch (err) {
+        resultEl.innerHTML = `<span style="color:#dc2626;">取得エラー: ${err.message}</span>`;
+      }
+    }
+  </script>
+</body>
+</html>

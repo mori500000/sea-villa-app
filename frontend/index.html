@@ -7,7 +7,8 @@
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <style>
     body { margin: 0; font-family: sans-serif; display: flex; height: 100vh; }
-    #map { flex: 1; height: 100%; }
+    #map { flex: 1; height: 100%; background: #07192f; }
+      .graticule-label { color: rgba(148, 163, 184, 0.55); font-size: 10px; pointer-events: none; }
     #panel { width: 360px; padding: 16px; box-sizing: border-box; background: #f8fafc; border-left: 1px solid #cbd5e1; overflow-y: auto; }
     .control { margin-bottom: 12px; }
     .section-title { font-size: 13px; font-weight: bold; color: #0f172a; margin: 14px 0 8px; padding-top: 10px; border-top: 1px solid #e2e8f0; }
@@ -64,10 +65,98 @@
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script>
     const API_URL = "https://sea-villa-api-280099873850.asia-northeast1.run.app/simulate";
-    const map = L.map("map").setView([26.2, 127.7], 5);
-    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-      attribution: "&copy; OpenStreetMap contributors"
-    }).addTo(map);
+    const map = L.map("map", {
+      worldCopyJump: true
+    }).setView([26.2, 127.7], 5);
+
+      map.createPane("gridPane");
+      map.getPane("gridPane").style.zIndex = 210;
+      map.getPane("gridPane").style.pointerEvents = "none";
+
+      map.createPane("landPane");
+      map.getPane("landPane").style.zIndex = 220;
+      map.getPane("landPane").style.pointerEvents = "none";
+
+      map.createPane("coastPane");
+      map.getPane("coastPane").style.zIndex = 230;
+      map.getPane("coastPane").style.pointerEvents = "none";
+
+      map.createPane("simPane");
+      map.getPane("simPane").style.zIndex = 420;
+
+      const gridStyle = {
+        color: "rgba(148, 163, 184, 0.16)",
+        weight: 0.8,
+        interactive: false,
+        pane: "gridPane"
+      };
+
+      const landStyle = {
+        fillColor: "#1e293b",
+        fillOpacity: 0.95,
+        color: "transparent",
+        weight: 0,
+        interactive: false,
+        pane: "landPane"
+      };
+
+      const coastlineStyle = {
+        color: "#7dd3fc",
+        weight: 1.1,
+        opacity: 0.85,
+        interactive: false,
+        pane: "coastPane"
+      };
+
+      function drawGraticule(stepLat = 15, stepLon = 15) {
+        const lines = [];
+        for (let lat = -75; lat <= 75; lat += stepLat) {
+          lines.push([[-180, lat], [180, lat]]);
+        }
+        for (let lon = -180; lon <= 180; lon += stepLon) {
+          lines.push([[lon, -85], [lon, 85]]);
+        }
+        L.polyline(
+          lines.map(seg => seg.map(([x, y]) => [y, x])),
+          gridStyle
+        ).addTo(map);
+      }
+      drawGraticule(15, 15);
+
+      let landLayer = null;
+      let coastlineLayer = null;
+
+      async function loadBaseLayers() {
+        try {
+          const landResp = await fetch("./data/land.geojson", { cache: "no-store" });
+          if (landResp.ok) {
+            const landGeojson = await landResp.json();
+            landLayer = L.geoJSON(landGeojson, {
+              style: () => landStyle,
+              pane: "landPane",
+              interactive: false
+            }).addTo(map);
+          } else {
+            console.warn("land.geojson の読み込みをスキップしました: HTTP", landResp.status);
+          }
+        } catch (err) {
+          console.warn("land.geojson の読み込みエラー:", err);
+        }
+
+        try {
+          const resp = await fetch("./data/coastlines.geojson", { cache: "no-store" });
+          if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+          const geojson = await resp.json();
+          coastlineLayer = L.geoJSON(geojson, {
+            style: () => coastlineStyle,
+            pane: "coastPane",
+            interactive: false
+          }).addTo(map);
+        } catch (err) {
+          console.warn("海岸線GeoJSONの読み込みをスキップしました:", err);
+        }
+      }
+      loadBaseLayers();
     let marker = null;
     let lastLatLng = null;
 
@@ -154,6 +243,7 @@
 
         if (marker) map.removeLayer(marker);
         marker = L.circleMarker([lat, lng], {
+            pane: "simPane",
           radius: 10,
           color: "#0f172a",
           weight: 2,
