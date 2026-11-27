@@ -82,6 +82,51 @@ class SimulationRequest(BaseModel):
     interventions: InterventionParams = Field(default_factory=InterventionParams)
 
 
+def _lerp_hex(hex_a: str, hex_b: str, t: float) -> str:
+    t = max(0.0, min(1.0, t))
+    ra, ga, ba = int(hex_a[1:3], 16), int(hex_a[3:5], 16), int(hex_a[5:7], 16)
+    rb, gb, bb = int(hex_b[1:3], 16), int(hex_b[3:5], 16), int(hex_b[5:7], 16)
+    r = round(ra + (rb - ra) * t)
+    g = round(ga + (gb - ga) * t)
+    b = round(ba + (bb - ba) * t)
+    return f"#{r:02X}{g:02X}{b:02X}"
+
+
+def _calc_sea_appearance_1pct(
+    rate_pct: float,
+    cumulative_stress: float = 0.0,
+    dimming_stress: float = 0.0,
+) -> dict:
+    # 0%定義: ストレス・白化がなく基準状態（健全ラグーン）にある起点
+    # 0%〜100% の1%刻み整数（0, 1, ..., 100）に正規化
+    pct = int(max(0, min(100, round(rate_pct))))
+    zero_hex = "#00B4D8"
+    mid_hex = "#38A3A5"
+    full_hex = "#5E6B48"
+
+    if pct == 0 and cumulative_stress <= 0.0 and dimming_stress <= 0.0:
+        state = "baseline_healthy_0pct"
+        hex_color = zero_hex
+    elif pct <= 50:
+        state = "baseline_healthy_0pct" if pct == 0 else "early_stress_fading"
+        hex_color = _lerp_hex(zero_hex, mid_hex, pct / 50.0)
+    else:
+        state = "murky_algae_shifted" if pct >= 75 else "fading_turquoise"
+        hex_color = _lerp_hex(mid_hex, full_hex, (pct - 50) / 50.0)
+
+    if dimming_stress >= 0.55:
+        state = "dimmed_aerosol_haze"
+        haze_t = min(1.0, (dimming_stress - 0.55) / 0.45)
+        hex_color = _lerp_hex(hex_color, "#6C7A89", haze_t)
+
+    return {
+        "state": state,
+        "percent_1pct": pct,
+        "ratio_0_to_1": round(pct / 100.0, 2),
+        "hex_color": hex_color,
+    }
+
+
 def _clamp01(val: float) -> float:
     return min(1.0, max(0.0, val))
 
@@ -208,18 +253,13 @@ def _compute_point(
     degradation = min(
         1.0, (bleaching_rate / 100.0) * 0.65 + cumulative_stress * 0.25 + dimming_stress * 0.25
     )
-    if dimming_stress >= 0.55:
-        appearance_state = "dimmed_aerosol_haze"
-        hex_color = "#6C7A89"
-    elif degradation >= 0.65:
-        appearance_state = "murky_algae_shifted"
-        hex_color = "#5E6B48"
-    elif degradation >= 0.30:
-        appearance_state = "fading_turquoise"
-        hex_color = "#38A3A5"
-    else:
-        appearance_state = "vibrant_coral_lagoon"
-        hex_color = "#00B4D8"
+    _app_1pct = _calc_sea_appearance_1pct(
+        rate_pct=bleaching_rate,
+        cumulative_stress=cumulative_stress,
+        dimming_stress=dimming_stress,
+    )
+    appearance_state = _app_1pct["state"]
+    hex_color = _app_1pct["hex_color"]
 
     point = {
         "year": target_year,
