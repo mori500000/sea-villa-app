@@ -20,6 +20,8 @@
     .tradeoff-box { background: #f1f5f9; border-radius: 6px; padding: 8px; margin-top: 8px; font-size: 12px; }
     .tradeoff-row { display: flex; justify-content: space-between; margin: 3px 0; }
   </style>
+  <link rel="stylesheet" href="./coral-popup.css" />
+  <script src="./coral-popup.js" defer></script>
 </head>
 <body>
   <div id="map"></div>
@@ -236,6 +238,16 @@
         const coral = data.coral_health || {};
         const app = data.sea_appearance || {};
         const hex = app.hex_color || "#00B4D8";
+        if (window.showCoralPopup) {
+          window.showCoralPopup({
+            hexColor: hex,
+            bleachingRate: coral.bleaching_rate_percent,
+            year: Number(yearEl.value),
+            lat: Number(lat.toFixed(4)),
+            lon: Number(lng.toFixed(4)),
+            locationName: data.location_name
+          });
+        }
         const interv = data.interventions || {};
         const cooling = interv.cooling_effects || {};
         const tr = data.tradeoffs || {};
