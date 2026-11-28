@@ -1,0 +1,311 @@
+(() => {
+  const mountPopup = () => {
+    if (document.getElementById("coral-popup")) return;
+
+    const style = document.createElement("style");
+    style.textContent = `
+      #mc-tank-overlay {
+        position: fixed;
+        inset: 0;
+        z-index: 2500;
+        display: none;
+        flex-direction: column;
+        background: rgba(3, 10, 20, 0.88);
+        backdrop-filter: blur(8px);
+        padding: 20px;
+        box-sizing: border-box;
+        color: #f1f5f9;
+      }
+      #mc-tank-overlay.is-open {
+        display: flex;
+      }
+      #mc-tank-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        margin-bottom: 12px;
+      }
+      #mc-tank-title {
+        font-size: 16px;
+        font-weight: 700;
+      }
+      #mc-tank-actions {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      .mc-tank-btn {
+        border: 1px solid rgba(148, 163, 184, 0.35);
+        background: rgba(15, 23, 42, 0.9);
+        color: #f8fafc;
+        border-radius: 8px;
+        padding: 8px 14px;
+        font-size: 12px;
+        font-weight: 600;
+        cursor: pointer;
+      }
+      .mc-tank-btn.primary {
+        background: #22c55e;
+        color: #052e16;
+        border-color: transparent;
+        font-weight: 700;
+      }
+      #mc-tank-frame {
+        position: relative;
+        flex: 1;
+        min-height: 0;
+        border-radius: 16px;
+        overflow: hidden;
+        border: 3px solid rgba(186, 230, 253, 0.35);
+        box-shadow: inset 0 0 60px rgba(255, 255, 255, 0.08), 0 20px 50px rgba(0, 0, 0, 0.65);
+        background: #061526;
+      }
+      #mc-tank-svg {
+        width: 100%;
+        height: 100%;
+        display: block;
+      }
+      #mc-tank-footer {
+        margin-top: 10px;
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        font-size: 12px;
+        color: #cbd5e1;
+      }
+      #mc-tank-params {
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 11px;
+        background: rgba(15, 23, 42, 0.85);
+        padding: 6px 10px;
+        border-radius: 6px;
+        word-break: break-all;
+      }
+    `;
+    document.head.appendChild(style);
+
+    const wrapper = document.createElement("div");
+    wrapper.innerHTML = `
+      <div id="coral-popup" role="dialog" aria-label="サンゴの海シミュレーション結果">
+        <div id="coral-popup-header">
+          <span>サンゴの海プレビュー</span>
+          <button id="coral-popup-close" type="button" aria-label="閉じる">×</button>
+        </div>
+        <svg id="coral-scene-svg" viewBox="0 0 280 130" xmlns="http://www.w3.org/2000/svg">
+          <defs>
+            <linearGradient id="seaGrad" x1="0" y1="0" x2="0" y2="1">
+              <stop id="seaGradTop" offset="0%" stop-color="#00B4D8" />
+              <stop id="seaGradBottom" offset="100%" stop-color="#007791" />
+            </linearGradient>
+          </defs>
+          <rect x="0" y="0" width="280" height="130" fill="#061526" />
+          <rect id="seaSurfaceRect" x="0" y="18" width="280" height="112" fill="url(#seaGrad)" opacity="0.82" />
+          <path d="M0,18 Q35,14 70,18 T140,18 T210,18 T280,18" fill="none" stroke="#bae6fd" stroke-width="1.5" opacity="0.7" />
+          <path d="M0,106 Q70,100 140,107 T280,104 L280,130 L0,130 Z" fill="#cbd5e1" opacity="0.35" />
+          <g id="coralGroup">
+            <path d="M58,108 L58,76 M58,90 L42,74 M58,84 L73,70 M42,74 L36,62 M42,74 L49,61 M73,70 L79,58"
+                  stroke="#fb7185" stroke-width="6" stroke-linecap="round" fill="none" />
+            <ellipse cx="140" cy="102" rx="28" ry="11" fill="#f472b6" />
+            <path d="M140,100 L140,78 M140,88 L124,75 M140,86 L156,74"
+                  stroke="#fda4af" stroke-width="5" stroke-linecap="round" fill="none" />
+            <path d="M218,108 L218,80 M218,92 L204,78 M218,88 L232,76"
+                  stroke="#fb923c" stroke-width="5.5" stroke-linecap="round" fill="none" />
+          </g>
+        </svg>
+        <div id="coral-popup-meta"></div>
+        <button id="minecraft-bridge-btn" type="button">マインクライフ連携へ進む</button>
+      </div>
+
+      <div id="mc-tank-overlay" role="dialog" aria-modal="true" aria-label="マインクラフト海底水槽ビュー">
+        <div id="mc-tank-header">
+          <div id="mc-tank-title">海底水槽ビュー（マインクラフト連携プレビュー）</div>
+          <div id="mc-tank-actions">
+            <button id="mc-copy-btn" class="mc-tank-btn primary" type="button">連携パラメータをコピー</button>
+            <button id="mc-tank-close" class="mc-tank-btn" type="button">閉じる (Esc)</button>
+          </div>
+        </div>
+        <div id="mc-tank-frame">
+          <svg id="mc-tank-svg" viewBox="0 0 1200 620" preserveAspectRatio="xMidYMid slice" xmlns="http://www.w3.org/2000/svg">
+            <defs>
+              <linearGradient id="mcTankWaterGrad" x1="0" y1="0" x2="0" y2="1">
+                <stop id="mcTankGradTop" offset="0%" stop-color="#00B4D8" />
+                <stop id="mcTankGradMid" offset="55%" stop-color="#007791" />
+                <stop id="mcTankGradBottom" offset="100%" stop-color="#041c2c" />
+              </linearGradient>
+            </defs>
+
+            <rect x="0" y="0" width="1200" height="620" fill="#051322" />
+            <rect id="mcTankWaterRect" x="0" y="42" width="1200" height="578" fill="url(#mcTankWaterGrad)" opacity="0.88" />
+
+            <polygon points="160,42 320,42 460,520 120,520" fill="#ffffff" opacity="0.06" />
+            <polygon points="520,42 710,42 890,520 560,520" fill="#ffffff" opacity="0.05" />
+            <polygon points="880,42 1030,42 1150,520 920,520" fill="#ffffff" opacity="0.04" />
+
+            <path d="M0,42 Q75,34 150,42 T300,42 T450,42 T600,42 T750,42 T900,42 T1050,42 T1200,42"
+                  fill="none" stroke="#e0f2fe" stroke-width="3" opacity="0.75" />
+
+            <path d="M0,470 L130,420 L260,465 L410,435 L580,475 L760,430 L960,468 L1200,425 L1200,620 L0,620 Z"
+                  fill="#0f172a" opacity="0.55" />
+
+            <path d="M0,515 Q300,498 600,518 T1200,508 L1200,620 L0,620 Z" fill="#cbd5e1" opacity="0.42" />
+
+            <g id="mcTankCoralGroup">
+              <g stroke="#fb7185" stroke-width="14" stroke-linecap="round" fill="none">
+                <path d="M220,520 L220,390" />
+                <path d="M220,450 L165,395" />
+                <path d="M220,425 L275,375" />
+                <path d="M165,395 L145,350" />
+                <path d="M165,395 L190,348" />
+                <path d="M275,375 L300,332" />
+              </g>
+              <ellipse cx="470" cy="505" rx="85" ry="26" fill="#f472b6" />
+              <g stroke="#fda4af" stroke-width="11" stroke-linecap="round" fill="none">
+                <path d="M470,498 L470,415" />
+                <path d="M470,455 L420,408" />
+                <path d="M470,445 L522,402" />
+              </g>
+              <g stroke="#38bdf8" stroke-width="12" stroke-linecap="round" fill="none">
+                <path d="M735,515 L735,405" />
+                <path d="M735,460 L685,412" />
+                <path d="M735,445 L788,402" />
+              </g>
+              <ellipse cx="985" cy="508" rx="75" ry="24" fill="#fb923c" />
+              <g stroke="#fdba74" stroke-width="12" stroke-linecap="round" fill="none">
+                <path d="M985,500 L985,400" />
+                <path d="M985,450 L938,406" />
+                <path d="M985,438 L1035,398" />
+              </g>
+            </g>
+
+            <rect x="8" y="8" width="1184" height="604" rx="14" fill="none" stroke="#ffffff" stroke-opacity="0.14" stroke-width="2" />
+          </svg>
+        </div>
+        <div id="mc-tank-footer">
+          <div id="mc-tank-summary"></div>
+          <div id="mc-tank-params"></div>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(wrapper.firstElementChild);
+
+    const popupEl = document.getElementById("coral-popup");
+    const closeBtn = document.getElementById("coral-popup-close");
+    const topStop = document.getElementById("seaGradTop");
+    const bottomStop = document.getElementById("seaGradBottom");
+    const coralGroup = document.getElementById("coralGroup");
+    const metaEl = document.getElementById("coral-popup-meta");
+    const mcBtn = document.getElementById("minecraft-bridge-btn");
+
+    const tankOverlay = document.getElementById("mc-tank-overlay");
+    const tankCloseBtn = document.getElementById("mc-tank-close");
+    const tankCopyBtn = document.getElementById("mc-copy-btn");
+    const tankGradTop = document.getElementById("mcTankGradTop");
+    const tankGradMid = document.getElementById("mcTankGradMid");
+    const tankGradBottom = document.getElementById("mcTankGradBottom");
+    const tankCoralGroup = document.getElementById("mcTankCoralGroup");
+    const tankSummary = document.getElementById("mc-tank-summary");
+    const tankParams = document.getElementById("mc-tank-params");
+
+    let latestPayload = null;
+    let latestQueryString = "";
+
+    const scaleHex = (hex, factor = 0.65) => {
+      const clean = (hex || "#00B4D8").replace("#", "");
+      if (clean.length !== 6) return "#007791";
+      const rgb = [0, 2, 4].map((i) =>
+        Math.max(0, Math.min(255, Math.round(parseInt(clean.slice(i, i + 2), 16) * factor)))
+      );
+      return "#" + rgb.map((v) => v.toString(16).padStart(2, "0")).join("");
+    };
+
+    const applySeaVisuals = ({ seaHex, pct }) => {
+      const sat = Math.max(0.12, 1 - (pct / 100) * 0.88);
+      const bright = 1 + (pct / 100) * 0.25;
+      const filterCss = `saturate(${sat.toFixed(2)}) brightness(${bright.toFixed(2)})`;
+
+      topStop.setAttribute("stop-color", seaHex);
+      bottomStop.setAttribute("stop-color", scaleHex(seaHex, 0.65));
+      coralGroup.style.filter = filterCss;
+
+      tankGradTop.setAttribute("stop-color", seaHex);
+      tankGradMid.setAttribute("stop-color", scaleHex(seaHex, 0.72));
+      tankGradBottom.setAttribute("stop-color", scaleHex(seaHex, 0.35));
+      tankCoralGroup.style.filter = filterCss;
+    };
+
+    window.showCoralPopup = ({ hexColor, bleachingRate, year, lat, lon, locationName }) => {
+      const seaHex = hexColor || "#00B4D8";
+      const pct = Math.max(0, Math.min(100, Number(bleachingRate ?? 0)));
+
+      latestPayload = { locationName: locationName || "", lat, lon, year, bleachingRate: pct, seaHex };
+      latestQueryString = new URLSearchParams({
+        lat: String(lat ?? ""),
+        lon: String(lon ?? ""),
+        year: String(year ?? ""),
+        bleaching: String(pct),
+        sea_hex: seaHex,
+      }).toString();
+
+      applySeaVisuals({ seaHex, pct });
+      metaEl.innerHTML = `白化率: <b>${pct}%</b> ／ 海色: <code>${seaHex}</code>` + (year ? ` ／ ${year}年` : "");
+      popupEl.classList.add("is-open");
+    };
+
+    const openTankView = () => {
+      const payload = latestPayload || {
+        locationName: "",
+        lat: "",
+        lon: "",
+        year: "",
+        bleachingRate: 0,
+        seaHex: "#00B4D8",
+      };
+      applySeaVisuals({ seaHex: payload.seaHex, pct: payload.bleachingRate });
+
+      const locLabel = payload.locationName ? `${payload.locationName} ／ ` : "";
+      const yearLabel = payload.year ? `${payload.year}年 ／ ` : "";
+      tankSummary.textContent = `${locLabel}${yearLabel}白化率 ${payload.bleachingRate}% ／ 海色 ${payload.seaHex}`;
+      tankParams.textContent = latestQueryString || `bleaching=${payload.bleachingRate}&sea_hex=${payload.seaHex}`;
+
+      tankOverlay.classList.add("is-open");
+    };
+
+    const closeTankView = () => {
+      tankOverlay.classList.remove("is-open");
+    };
+
+    closeBtn.addEventListener("click", () => popupEl.classList.remove("is-open"));
+    mcBtn.addEventListener("click", openTankView);
+    tankCloseBtn.addEventListener("click", closeTankView);
+
+    tankCopyBtn.addEventListener("click", async () => {
+      const text = tankParams.textContent || "";
+      if (!text) return;
+      try {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          await navigator.clipboard.writeText(text);
+          const prev = tankCopyBtn.textContent;
+          tankCopyBtn.textContent = "コピー済み";
+          setTimeout(() => {
+            tankCopyBtn.textContent = prev;
+          }, 1400);
+        }
+      } catch (_) {}
+    });
+
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape" && tankOverlay.classList.contains("is-open")) {
+        closeTankView();
+      }
+    });
+  };
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", mountPopup);
+  } else {
+    mountPopup();
+  }
+})();
